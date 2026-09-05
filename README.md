@@ -88,7 +88,7 @@ Naming these boundaries explicitly is deliberate — a system that claims to def
 2. **Apply network isolation rules** — `iptables`/`nftables` egress allowlist. See `/network` for the ruleset and rationale.
 3. **Build the container** — non-privileged Docker container with resource limits and a scoped bind mount. See `/container` for the Dockerfile and run configuration.
 4. **Load the policy engine** — the pre-execution policy file and enforcement hook. See `/policy` for the ruleset format and examples.
-5. **Enable audit logging** — configure the external log destination before running any agent task. See `/audit` for the logging configuration and a sample redacted log.
+5. **Enable audit logging** — configure the external log destination before running any agent task. See `/audits` for the logging configuration and a sample redacted log.
 6. **Snapshot before every run** — automation scripts for VM snapshot/rollback live in `/scripts`.
 
 ## Policy Enforcement Example
@@ -117,7 +117,7 @@ Actions that fall outside the allowlist are denied and logged — not silently b
 
 ## Audit Logging
 
-Every command executed, file touched, and network call made by the agent is written to a log store outside the sandbox boundary — so the record survives even if the sandbox itself is compromised or the agent behaves unexpectedly. A redacted sample entry (see `/audit` for full format and configuration):
+Every command executed, file touched, and network call made by the agent is written to a log store outside the sandbox boundary — so the record survives even if the sandbox itself is compromised or the agent behaves unexpectedly. A redacted sample entry (see `/audits` for full format and configuration):
 
 ```json
 {
