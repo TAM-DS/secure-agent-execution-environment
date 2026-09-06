@@ -25,11 +25,11 @@ The design follows a defense-in-depth model: no single control is trusted to be 
                     (isolated network only)
                               │
 ┌─────────────────────────────────────────────────────────────┐
-│  LAYER 1 — VIRTUAL MACHINE (VirtualBox, host-only network)   │
-│  • No route to host LAN                                      │
-│  • Egress allowlist enforced at the VM's own firewall         │
-│    (only the AI provider API endpoint is reachable)           │
-│  • Snapshot taken before every agent run — full rollback      │
+│  LAYER 1 — NETWORK ISOLATION (Docker bridge networks)        │
+│  • agent-sandbox-net is internal — no default route out       │
+│  • agent-egress-net has outbound access                       │
+│  • agent-proxy (Squid) bridges the two, allowlisting only     │
+│    api.anthropic.com — everything else is denied              │
 └─────────────────────────────────────────────────────────────┘
                               │
                     (container boundary)
@@ -61,7 +61,11 @@ The design follows a defense-in-depth model: no single control is trusted to be 
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Design principle:** each layer is independently useful. The VM boundary alone stops lateral movement onto the host network. The container boundary alone limits blast radius on the filesystem. The policy engine alone catches a specific class of unauthorized action. The audit log alone guarantees a record survives even if every other control is bypassed. Together, they mean no single misconfiguration or vulnerability compromises the whole system.
+**Operational safety net:** `scripts/snapshot.sh` and `scripts/rollback.sh` back up
+and restore `container/workspace/` independent of the four security layers, since
+containers are disposable and only `/workspace` holds persistent state.
+
+**Design principle:** each layer is independently useful. The network isolation boundary alone stops the sandbox from reaching anything outside the allowlisted proxy destination. The container boundary alone limits blast radius on the filesystem. The policy engine alone catches a specific class of unauthorized action. The audit log alone guarantees a record survives even if every other control is bypassed. Together, they mean no single misconfiguration or vulnerability compromises the whole system.
 
 ## Threat Model
 
@@ -73,7 +77,7 @@ The design follows a defense-in-depth model: no single control is trusted to be 
 - Persistence of unauthorized changes across sessions (mitigated via snapshot/rollback)
 
 **Explicitly out of scope — what this is not:**
-- This is not a defense against a fully compromised host hypervisor or a VirtualBox-level 0-day; the VM boundary assumes VirtualBox itself is trustworthy.
+- This is not a defense against a compromised Docker daemon or a host kernel exploit; the Docker network isolation layer assumes the Docker daemon and host kernel are trustworthy.
 - This is not a production-grade multi-tenant isolation system; it's a single-operator local sandbox pattern, not a hardened cloud service.
 - This does not address model-level risks (prompt injection causing the agent to *request* a harmful action) — it addresses whether that request, once made, can actually succeed. Those are different problems and this project only solves the second one.
 - This does not replace a formal security review for any production deployment; it demonstrates the pattern, not a certified implementation.
@@ -103,6 +107,11 @@ Run these in order from the repo root:
 4. **Check the audit trail** — every call to `enforce.py` appends a JSON line to
    `audits/decisions.log` (gitignored, since it grows locally on every run).
    `audits/sample-decisions.log` is a committed, frozen example of the format.
+5. **Snapshot and roll back workspace state** — `scripts/snapshot.sh` backs up
+   `container/workspace/` to a timestamped folder; `scripts/rollback.sh` restores
+   from a chosen backup (with a confirmation prompt if the workspace isn't empty).
+   Since containers are disposable, rollback doesn't touch the container itself —
+   just recreate it with `container/run.sh` after restoring.
 
 ### Every layer follows the same pattern
 
