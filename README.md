@@ -82,52 +82,96 @@ Naming these boundaries explicitly is deliberate — a system that claims to def
 
 ## Setup / Reproduce
 
-> Detailed step-by-step instructions live in each subfolder's README. High-level sequence:
+The current build uses Docker networks and containers rather than a VirtualBox VM.
+Run these in order from the repo root:
 
-1. **Provision the VM** — VirtualBox, host-only or internal network adapter only (no bridged/NAT access to the host LAN). See `/network` for the exact adapter configuration.
-2. **Apply network isolation rules** — `iptables`/`nftables` egress allowlist. See `/network` for the ruleset and rationale.
-3. **Build the container** — non-privileged Docker container with resource limits and a scoped bind mount. See `/container` for the Dockerfile and run configuration.
-4. **Load the policy engine** — the pre-execution policy file and enforcement hook. See `/policy` for the ruleset format and examples.
-5. **Enable audit logging** — configure the external log destination before running any agent task. See `/audits` for the logging configuration and a sample redacted log.
-6. **Snapshot before every run** — automation scripts for VM snapshot/rollback live in `/scripts`.
+1. **Create the network topology** — `network/setup.sh` creates `agent-sandbox-net`
+   (an internal bridge network with no default route to the internet), creates
+   `agent-egress-net` (a normal bridge network with outbound access), and starts
+   `agent-proxy` (Squid, config at `network/squid.conf`) attached to both — the only
+   path from the sandbox network out.
+2. **Build and run the hardened agent container** — `docker build -t agent-sandbox-base
+   container/` builds the non-root image (`container/Dockerfile`), then
+   `container/run.sh` runs it attached only to `agent-sandbox-net`, with all Linux
+   capabilities dropped, `no-new-privileges`, memory/CPU limits, a read-only root
+   filesystem, a `tmpfs` `/tmp`, and `./workspace` bind-mounted as the only writable,
+   persistent path.
+3. **Gate actions through the policy engine** — `policy/enforce.py <action> <path>`
+   evaluates a proposed action against `policy/rules.yaml` (default-deny, explicit
+   allow/deny rules with path-prefix matching) and exits 0/1 accordingly, so it can be
+   used as a real precondition check rather than just a demo.
+4. **Check the audit trail** — every call to `enforce.py` appends a JSON line to
+   `audits/decisions.log` (gitignored, since it grows locally on every run).
+   `audits/sample-decisions.log` is a committed, frozen example of the format.
+
+### Every layer follows the same pattern
+
+Network, container, and policy are three independent layers, and each one applies
+the same default-deny / explicit-allow rule rather than a bespoke scheme per layer:
+the sandbox network has no route out except through the proxy's allowlist, the
+container denies all filesystem writes except the mounted `/workspace`, and the
+policy engine denies all actions except those explicitly allowed in `rules.yaml`.
+Each layer was tested in both directions — an allowed case succeeding and a denied
+case failing closed — with the results saved alongside the code that implements it:
+`network/isolation-test-results.md`, `container/hardening-test-results.md`, and
+`policy/policy-test-results.md`.
 
 ## Policy Enforcement Example
 
-The policy engine intercepts every agent-proposed action before it executes, checking it against an explicit allow/deny ruleset. A minimal example (full ruleset and engine code in `/policy`):
+`policy/enforce.py` loads `policy/rules.yaml` and checks a proposed action (action
+type + target path) against it, printing `ALLOWED`/`DENIED` and the specific rule
+that matched, then exiting 0 or 1 — so it can gate a real script, not just narrate a
+decision. The current ruleset (`policy/rules.yaml`, in full):
 
 ```yaml
-# policy/rules.yaml — illustrative excerpt
 default: deny
 
 allow:
   - action: file_write
     path_prefix: /workspace/
-  - action: network_call
-    destination: api.anthropic.com
+  - action: file_delete
+    path_prefix: /workspace/
 
 deny:
   - action: file_delete
     path_prefix: /
-    exceptions: [/workspace/]
-  - action: network_call
-    destination: "*"          # everything not explicitly allowed above
+    exceptions:
+      - /workspace/
 ```
 
-Actions that fall outside the allowlist are denied and logged — not silently blocked, but recorded as a denied attempt, since a denied action is itself a signal worth capturing.
+```
+$ python3 policy/enforce.py file_write /workspace/output.py
+ALLOWED
+Matching rule: allow: {'action': 'file_write', 'path_prefix': '/workspace/'}
+
+$ python3 policy/enforce.py file_delete /etc/passwd
+DENIED
+Matching rule: deny: {'action': 'file_delete', 'path_prefix': '/', 'exceptions': ['/workspace/']}
+```
+
+Actions that fall outside the allowlist are denied by default, not just by an
+explicit deny rule — omission is not the same as permission. Full test matrix
+(including the boundary case of a deny rule's `exceptions` not itself implying an
+allow) is in `policy/policy-test-results.md`.
 
 ## Audit Logging
 
-Every command executed, file touched, and network call made by the agent is written to a log store outside the sandbox boundary — so the record survives even if the sandbox itself is compromised or the agent behaves unexpectedly. A redacted sample entry (see `/audits` for full format and configuration):
+Every call to `policy/enforce.py` appends a structured JSON line to
+`audits/decisions.log` — timestamp, action, path, decision, and the specific rule
+that matched. A real entry (from `audits/sample-decisions.log`, the committed,
+frozen example of the format):
 
 ```json
-{
-  "timestamp": "2026-09-05T14:32:07Z",
-  "action": "file_write",
-  "path": "/workspace/output.py",
-  "result": "allowed",
-  "policy_rule_matched": "file_write:/workspace/"
-}
+{"timestamp": "2026-09-06T14:15:00.302500+00:00", "action": "file_delete", "path": "/workspace/output.py", "decision": "ALLOWED", "matching_rule": "allow: {'action': 'file_delete', 'path_prefix': '/workspace/'}"}
 ```
+
+The log path (`audits/`) is resolved relative to the script's own location, not
+`/workspace`, so it lands outside the one directory the sandboxed agent container can
+write to. This is a stronger guarantee than a permission check: the log doesn't sit
+inside the container's mounted filesystem at all, so there's no path traversal or
+permission escalation from inside the sandbox that reaches it — it's not merely
+access-denied, it's not present in the container's view of the filesystem in the
+first place.
 
 ---
 
