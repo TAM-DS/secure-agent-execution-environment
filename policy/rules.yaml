@@ -1,0 +1,13 @@
+default: deny
+
+allow:
+  - action: file_write
+    path_prefix: /workspace/
+  - action: file_delete
+    path_prefix: /workspace/
+
+deny:
+  - action: file_delete
+    path_prefix: /
+    exceptions:
+      - /workspace/
