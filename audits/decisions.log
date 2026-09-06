@@ -1,0 +1,5 @@
+{"timestamp": "2026-09-06T14:15:00.186068+00:00", "action": "file_write", "path": "/workspace/output.py", "decision": "ALLOWED", "matching_rule": "allow: {'action': 'file_write', 'path_prefix': '/workspace/'}"}
+{"timestamp": "2026-09-06T14:15:00.233900+00:00", "action": "file_write", "path": "/etc/passwd", "decision": "DENIED", "matching_rule": "default: deny"}
+{"timestamp": "2026-09-06T14:15:00.269114+00:00", "action": "file_delete", "path": "/etc/passwd", "decision": "DENIED", "matching_rule": "deny: {'action': 'file_delete', 'path_prefix': '/', 'exceptions': ['/workspace/']}"}
+{"timestamp": "2026-09-06T14:15:00.302500+00:00", "action": "file_delete", "path": "/workspace/output.py", "decision": "ALLOWED", "matching_rule": "allow: {'action': 'file_delete', 'path_prefix': '/workspace/'}"}
+{"timestamp": "2026-09-06T14:15:00.334902+00:00", "action": "file_write", "path": "/workspace2/output.py", "decision": "DENIED", "matching_rule": "default: deny"}

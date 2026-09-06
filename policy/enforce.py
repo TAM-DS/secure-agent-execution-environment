@@ -10,13 +10,16 @@ Example:
 Exits 0 if the action is ALLOWED, 1 if DENIED, 2 on usage/config errors.
 """
 
+import json
 import posixpath
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
 
 RULES_PATH = Path(__file__).parent / "rules.yaml"
+LOG_PATH = Path(__file__).parent.parent / "audits" / "decisions.log"
 
 
 def load_rules(path: Path) -> dict:
@@ -71,6 +74,19 @@ def evaluate(rules: dict, action: str, path: str):
     return decision, f"default: {default}"
 
 
+def log_decision(action: str, path: str, decision: str, matching_rule: str) -> None:
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "action": action,
+        "path": path,
+        "decision": decision,
+        "matching_rule": matching_rule,
+    }
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(LOG_PATH, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         print(f"Usage: {sys.argv[0]} <action> <path>", file=sys.stderr)
@@ -87,6 +103,8 @@ def main() -> int:
     decision, matching_rule = evaluate(rules, action, path)
     print(decision)
     print(f"Matching rule: {matching_rule}")
+
+    log_decision(action, path, decision, matching_rule)
 
     return 0 if decision == "ALLOWED" else 1
 
