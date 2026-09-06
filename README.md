@@ -1,6 +1,6 @@
 # Secure Agent Execution Environment
 
-**A hardened, auditable sandbox for AI agent code execution — designed to answer the question every enterprise adopting agentic AI eventually asks: "what stops the agent from doing something we didn't intend?"**
+### A hardened, auditable sandbox for AI agent code execution — designed to answer the question every enterprise adopting agentic AI eventually asks: "what stops the agent from doing something we didn't intend?"
 
 ---
 
