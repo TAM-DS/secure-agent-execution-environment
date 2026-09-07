@@ -187,3 +187,5 @@ first place.
 ## Why This Project Exists
 
 This isn't infrastructure for infrastructure's sake. It's a direct answer to the question that comes up in nearly every real conversation about deploying agentic AI in an enterprise context: agents are useful precisely because they act autonomously, and that autonomy is exactly what needs a designed boundary — not an afterthought, not a trust assumption, but an explicit, inspectable containment model. That's the architectural judgment this project is meant to demonstrate.
+
+<!-- CI pipeline verified working as of 2026-09-07 -->
