@@ -182,6 +182,20 @@ permission escalation from inside the sandbox that reaches it — it's not merel
 access-denied, it's not present in the container's view of the filesystem in the
 first place.
 
+## Continuous Integration
+
+A self-hosted GitHub Actions runner lives on this VM and picks up every push to
+`main`, running the network, container, and policy test suites automatically
+(`.github/workflows/test.yml`) — the same checks described above
+(`network/isolation-test-results.md`, `container/hardening-test-results.md`,
+`policy/policy-test-results.md`), re-run against the real Docker daemon on every
+change instead of only whenever someone remembers to run them by hand.
+
+This is CI, not CD: it's automated *verification* that the sandbox's isolation,
+hardening, and policy behavior still hold after a change — there's nothing to
+deploy. This project is infrastructure code and its own test subject, not a
+service with a deployment target.
+
 ---
 
 ## Why This Project Exists
