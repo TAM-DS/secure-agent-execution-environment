@@ -13,7 +13,15 @@ IMAGE="${IMAGE:-agent-sandbox-base}"
 # Host-side workspace dir must exist before it can be bind-mounted.
 mkdir -p "$WORKSPACE_DIR"
 
-docker run --rm -it \
+# Only request a pseudo-TTY when actually attached to one (interactive local
+# use). CI runners have no TTY, and `-it` there fails outright with
+# "cannot attach stdin to a TTY-enabled container".
+TTY_FLAGS=()
+if [ -t 0 ] && [ -t 1 ]; then
+  TTY_FLAGS=(-it)
+fi
+
+docker run --rm "${TTY_FLAGS[@]}" \
   --name agent-sandbox \
   `# Only reachable via the internal sandbox network - no default route out.` \
   --network agent-sandbox-net \

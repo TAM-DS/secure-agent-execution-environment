@@ -1,0 +1,156 @@
+name: Sandbox security tests
+
+# Run the full suite of sandbox proofs on every push to main: network
+# isolation, container hardening, and the policy engine.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    # These tests exercise real Docker networks/containers on the host, so
+    # they run on our own self-hosted runner rather than a GitHub-hosted one.
+    runs-on: self-hosted
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------
+      # 1. Network isolation test
+      #
+      # Re-runs the proxy curl tests documented in
+      # network/isolation-test-results.md: a container on the internal
+      # agent-sandbox-net (no default route out) must be able to reach
+      # api.anthropic.com through agent-proxy, and must be blocked from
+      # reaching anything else (google.com) by Squid's allowlist.
+      # -----------------------------------------------------------------
+      - name: Run the network isolation test
+        working-directory: network
+        run: |
+          set -euo pipefail
+
+          # The runner is a persistent host, so a prior run (or a manual
+          # test session) may have left the proxy/networks behind. Clear
+          # them first so this step is safe to re-run.
+          docker rm -f agent-proxy >/dev/null 2>&1 || true
+          docker network rm agent-sandbox-net agent-egress-net >/dev/null 2>&1 || true
+
+          # Bring up agent-sandbox-net / agent-egress-net / agent-proxy
+          # exactly as described in network/README.md.
+          ./setup.sh
+
+          # Squid takes a moment to start listening after `docker run -d`
+          # returns, so poll until agent-proxy actually accepts connections
+          # before firing the real tests.
+          for i in $(seq 1 15); do
+            if docker run --rm --network agent-sandbox-net curlimages/curl \
+              -sS -o /dev/null --max-time 2 http://agent-proxy:3128 2>/dev/null; then
+              break
+            fi
+            [ "$i" -eq 15 ] && { echo "FAIL: agent-proxy never became ready"; exit 1; }
+            sleep 1
+          done
+
+          echo "--- Test 1: curl https://api.anthropic.com (allowed destination) ---"
+          docker run --rm --network agent-sandbox-net \
+            -e https_proxy=http://agent-proxy:3128 \
+            curlimages/curl -sS -o /dev/null -w 'HTTP %{http_code}\n' \
+            https://api.anthropic.com
+
+          echo "--- Test 2: curl https://google.com (disallowed destination) ---"
+          # This curl is expected to fail (Squid returns 403 on the CONNECT),
+          # so a zero exit here means the allowlist did NOT block it.
+          if docker run --rm --network agent-sandbox-net \
+            -e https_proxy=http://agent-proxy:3128 \
+            curlimages/curl -sS -o /dev/null https://google.com; then
+            echo "FAIL: google.com should have been blocked by the proxy allowlist"
+            exit 1
+          fi
+          echo "PASS: google.com was correctly blocked"
+
+          # Left running (not torn down here): container/run.sh hardcodes
+          # --network agent-sandbox-net, so the next step needs this network
+          # and agent-proxy to still exist. The final cleanup step tears
+          # everything down once both steps are done.
+
+      # -----------------------------------------------------------------
+      # 2. Container hardening test
+      #
+      # Builds the sandbox image and runs it through container/run.sh
+      # (--read-only root fs, --cap-drop=ALL, no-new-privileges, etc. -
+      # see container/README.md), then verifies the two properties from
+      # container/hardening-test-results.md: /workspace is writable, and
+      # everything else on the root filesystem is not. run.sh attaches to
+      # agent-sandbox-net, so this step depends on the previous one.
+      # -----------------------------------------------------------------
+      - name: Run the container hardening test
+        run: |
+          set -euo pipefail
+
+          docker build -t agent-sandbox-base container/
+
+          echo "--- Test 1: write to /workspace (bind-mounted, persistent) ---"
+          ./container/run.sh sh -c 'echo hello > /workspace/test.txt && echo WORKSPACE_WRITE_OK'
+
+          echo "--- Test 2: write to / (root filesystem, should be denied) ---"
+          # This write is expected to fail because the root fs is --read-only,
+          # so a zero exit here means hardening did NOT hold.
+          if ./container/run.sh sh -c 'echo hello > /root-test.txt'; then
+            echo "FAIL: write to the read-only root filesystem should have been denied"
+            exit 1
+          fi
+          echo "PASS: root filesystem write was correctly denied"
+
+      # -----------------------------------------------------------------
+      # 3. Policy engine tests
+      #
+      # Re-runs every case from policy/policy-test-results.md against
+      # policy/enforce.py, checking both the printed decision and the
+      # process exit code (0 = ALLOWED, 1 = DENIED) match what's documented.
+      # -----------------------------------------------------------------
+      - name: Run the policy engine tests
+        working-directory: policy
+        run: |
+          set -euo pipefail
+
+          # check_case <expected exit code> <action> <path>
+          check_case() {
+            expected_exit="$1"; action="$2"; path="$3"
+            set +e
+            output=$(python3 enforce.py "$action" "$path")
+            actual_exit=$?
+            set -e
+            echo "$output"
+            if [ "$actual_exit" -ne "$expected_exit" ]; then
+              echo "FAIL: enforce.py $action $path -> exit $actual_exit, expected $expected_exit"
+              exit 1
+            fi
+          }
+
+          echo "--- Test 1: file_write inside /workspace/ (expect ALLOWED) ---"
+          check_case 0 file_write /workspace/output.py
+
+          echo "--- Test 2: file_write outside /workspace/ (expect DENIED, default deny) ---"
+          check_case 1 file_write /etc/passwd
+
+          echo "--- Test 3: file_delete outside /workspace/ (expect DENIED, explicit deny) ---"
+          check_case 1 file_delete /etc/passwd
+
+          echo "--- Test 4: file_delete inside /workspace/ (expect ALLOWED, explicit allow) ---"
+          check_case 0 file_delete /workspace/output.py
+
+          echo "--- Test 5: path prefix boundary /workspace2/ vs /workspace/ (expect DENIED) ---"
+          check_case 1 file_write /workspace2/output.py
+
+          echo "All policy engine test cases matched their expected decision."
+
+      # -----------------------------------------------------------------
+      # Cleanup: always tear down the network-isolation fixture (proxy +
+      # networks) brought up in step 1, whether the job passed or failed,
+      # so the next push starts from a clean, idempotent state.
+      # -----------------------------------------------------------------
+      - name: Clean up sandbox network fixture
+        if: always()
+        run: |
+          docker rm -f agent-proxy >/dev/null 2>&1 || true
+          docker network rm agent-sandbox-net agent-egress-net >/dev/null 2>&1 || true
